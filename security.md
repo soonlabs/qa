@@ -1,24 +1,125 @@
-# 安全问题分析报告
+# 安全问题分析报告（重新审查）
 
-生成时间：2026-03-03
-审查对象：agent-audit skill
+**生成时间**: 2026-03-03 (更新)
+**审查对象**: agent-audit skill (修复后版本)
+**审查范围**: 主 Skill + Standalone 版本 + Dashboard + REST API
 
 ---
 
-## 🔒 安全漏洞与风险
+## ✅ 已修复的安全问题
 
-### 1. **严重安全问题：敏感信息可能被写入报告文件**
-**文件**: `scripts/audit_scan.py:289-290`, `scripts/audit_scan.py:373-374`
+### 1. ✅ **已修复：敏感信息写入报告文件权限问题**
+**修复状态**: ✅ 完全修复
+**实现**: 
+1. 新增 `_secure_write()` 函数（lines 373-379）
+2. 使用原子文件写入（tempfile + os.replace）
+3. 设置文件权限为 0600（line 379）
+```python
+def _secure_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=str(path.parent), delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+    os.chmod(path, 0o600)  # ✅ 严格权限
+```
+
+### 2. ✅ **已修复：路径遍历漏洞（符号链接）**
+**修复状态**: ✅ 主 Skill 已修复
+**实现**: 新增 `_is_within()` 和符号链接检查（lines 173-195）
+```python
+def _is_within(base: Path, target: Path) -> bool:
+    try:
+        target.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+# 在扫描中使用
+if path.is_symlink() or not _is_within(base_dir, resolved):
+    continue
+```
+
+⚠️ **但**: Standalone 版本仍未修复此问题
+
+### 3. ⚠️ **部分修复：ReDoS 拒绝服务风险**
+**修复状态**: ⚠️ 部分改进
+**实现**: 
+1. 限制单词长度 `{3,10}`
+2. 限制总数量 `{11,23}`
+3. 添加上下文关键词预检
+
+**仍存在风险**: 在包含关键词的长文档中仍可能触发
+
+### 4. ✅ **已修复：竞态条件风险**
+**修复状态**: ✅ 完全修复
+**实现**: `_secure_write()` 使用原子写入
+
+### 5. ✅ **已修复：敏感信息模式扩展**
+**修复状态**: ✅ 主 Skill 已修复
+**实现**: 新增 AWS Key、JWT、Database URL 检测
+
+⚠️ **但**: Standalone 版本仍只检测 4 种
+
+### 6. ✅ **已修复：配置文件权限检查**
+**修复状态**: ✅ 完全修复
+**实现**: 新增 `_warn_perms()` 函数（lines 63-69）
+```python
+def _warn_perms(path: Path) -> None:
+    try:
+        stat_info = path.stat()
+    except OSError:
+        return
+    if stat_info.st_mode & 0o077:
+        print(f"⚠️  警告：{path} 权限过宽 (建议 600)", file=sys.stderr)
+```
+
+---
+
+## 🔒 新发现的安全问题
+
+### 新问题 #1: **Dashboard XSS 漏洞** 🔴
+**文件**: `agent_audit_dashboard.html`
 **严重程度**: 🔴 严重
 
 **问题描述**:
-脚本将扫描结果（包括掩码后的敏感信息）写入 JSON 和 Markdown 文件，这些文件默认存储在：
-- `~/.openclaw/workspace/audit_report.json`
-- `~/.openclaw/workspace/audit_report.md`
+Dashboard 使用模板字符串直接插入数据，未进行 HTML 转义：
+```javascript
+// line 283
+<td>${p.name}</td>
+// line 295  
+<td>${row.path}</td>
+// line 309
+<td>${row.model}</td>
+```
 
-**安全风险**:
-1. **敏感信息残留**: 即使经过掩码，`value[:6] + "…" + value[-4:]` 仍可能泄露部分敏感信息
-2. **文件权限问题**: 生成的报告文件可能具有过于宽松的权限，其他用户可读
+**攻击场景**:
+如果 agent 名称、文件路径或模型名包含恶意代码：
+```javascript
+// 攻击者在 memory 文件中创建：
+// /tmp/memory/<script>alert('XSS')</script>.md
+// 或配置 agent 名为："><script>alert(1)</script>
+```
+
+**影响**: 
+- 窃取 cookies/session
+- 修改页面内容
+- 重定向到钓鱼网站
+
+**修复建议**:
+```javascript
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+// 使用
+<td>${escapeHtml(p.name)}</td>
+```
 3. **持久化风险**: 报告文件长期保存在磁盘上，增加泄露风险
 4. **git 泄露风险**: 如果 workspace 目录在 git 仓库中，报告可能被意外提交
 
