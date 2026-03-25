@@ -77,12 +77,108 @@
       margin-bottom: 28px;
     }
 
+    .external-skill-block {
+      margin-bottom: 24px;
+    }
+
+    .external-skill-block h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .external-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+    }
+
+    .external-metric {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+    }
+
+    .external-metric .label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .external-metric .value {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
     .card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 18px;
       padding: 18px;
       box-shadow: 0 25px 45px rgba(0, 0, 0, 0.35);
+    }
+
+    .permission-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .perm-card {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      background: rgba(255, 255, 255, 0.03);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .perm-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .perm-name {
+      font-weight: 700;
+      font-size: 17px;
+      color: var(--text);
+    }
+
+    .perm-risk {
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .perm-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px 18px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .perm-meta .label {
+      color: var(--text);
+      font-size: 12px;
+      margin-right: 4px;
+    }
+
+    .perm-notes {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.55;
+      padding-top: 8px;
+      border-top: 1px dashed rgba(255, 255, 255, 0.15);
+    }
+
+    .permission-list .empty-row {
+      text-align: center;
+      color: var(--muted);
+      padding: 16px;
+      border: 1px dashed rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
     }
 
     .card h2 {
@@ -117,6 +213,32 @@
 
     .flex .card {
       flex: 1 1 280px;
+    }
+
+    .layout-grid {
+      display: grid;
+      grid-template-columns: minmax(360px, 1fr) minmax(280px, 1fr);
+      gap: 18px;
+      margin-top: 24px;
+      align-items: start;
+    }
+
+    .layout-grid .column-right {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .layout-grid .column-left {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    @media (max-width: 960px) {
+      .layout-grid {
+        grid-template-columns: 1fr;
+      }
     }
 
     .legend-card ul {
@@ -199,6 +321,8 @@
       <!-- 风险卡片动态渲染 -->
     </div>
 
+    <div id="externalSummary"></div>
+
     <div class="card legend-card">
       <h2>评分标准</h2>
       <ul>
@@ -209,42 +333,45 @@
       <p class="risk-desc">分数越高代表风险越大，颜色与上方卡片一致。</p>
     </div>
 
-    <div class="flex">
-      <div class="card">
-        <h2>权限概览</h2>
-        <table id="permissionTable"></table>
+    <div class="layout-grid">
+      <div class="column column-left">
+        <div class="card">
+          <h2>权限概览</h2>
+          <div id="permissionTable" class="permission-list"></div>
+        </div>
       </div>
-      <div class="card">
-        <h2>日志 & 记忆</h2>
-        <table id="memoryTable"></table>
-      </div>
-    </div>
-
-    <div class="flex">
-      <div class="card">
-        <h2>Token 消耗（近 7 天）</h2>
-        <table id="tokenTable"></table>
-      </div>
-      <div class="card">
-        <h2>修复建议</h2>
-        <div id="suggestions"></div>
+      <div class="column column-right">
+        <div class="card">
+          <h2>日志 & 记忆</h2>
+          <table id="memoryTable"></table>
+        </div>
+        <div class="card">
+          <h2>Token 消耗（近 7 天）</h2>
+          <table id="tokenTable"></table>
+        </div>
+        <div class="card">
+          <h2>修复建议</h2>
+          <div id="suggestions"></div>
+        </div>
       </div>
     </div>
   </div>
 
   <script>
     const riskSummaryEl = document.getElementById('riskSummary');
+    const externalSummaryEl = document.getElementById('externalSummary');
     const permissionTable = document.getElementById('permissionTable');
     const memoryTable = document.getElementById('memoryTable');
     const tokenTable = document.getElementById('tokenTable');
+    const tokenCard = tokenTable.closest('.card');
     const suggestionsEl = document.getElementById('suggestions');
     const lastRunEl = document.getElementById('last-run');
     const scanBtn = document.getElementById('scanBtn');
     const scanLabel = document.getElementById('scanLabel');
 
     const riskColors = score => {
-      if (score >= 70) return '#ff6b6b';
-      if (score >= 40) return '#ffb347';
+      if (score >= 60) return '#ff6b6b';
+      if (score >= 30) return '#ffb347';
       return '#36d399';
     };
 
@@ -263,7 +390,28 @@
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
 
+    const formatNotes = (notes = []) => {
+      const normalized = [];
+      let hasSensitive = false;
+      for (const raw of notes) {
+        if (!raw) continue;
+        if (/api\s*key/i.test(raw) || raw.includes('敏感配置') || raw.includes('已配置凭据')) {
+          hasSensitive = true;
+          continue;
+        }
+        normalized.push(raw);
+      }
+      if (hasSensitive) normalized.unshift('已配置敏感凭据（如 API Key）');
+      if (normalized.length) return normalized.join('；');
+      return hasSensitive ? '已配置敏感凭据（如 API Key）' : '－';
+    };
+
     function renderReport(report) {
+      window.latestReport = report;
+      console.log('externalOnly?', report.externalOnly, report.permissions?.length);
+      const permissions = report.permissions || [];
+      const externalEntries = permissions.filter(item => item.externalScores);
+
       const summary = [
         { label: '隐私泄露', score: report.privacyRisk ?? 0, desc: `敏感命中 ${report.memory?.sensitiveHits ?? 0} 次` },
         { label: '越权风险', score: report.privilegeRisk ?? 0, desc: `${report.permissions?.filter(p => (p.highRiskTools || []).length).length || 0} 个 Agent 拥有高危工具` },
@@ -272,7 +420,7 @@
         { label: '失败率', score: report.failureRisk ?? 0, desc: `日志错误率 ${((report.logs?.errorRate ?? 0) * 100).toFixed(2)}%` }
       ];
 
-      riskSummaryEl.innerHTML = summary.map(({ label, score, desc }) => {
+      let summaryHtml = summary.map(({ label, score, desc }) => {
         const meta = riskLevelInfo(score);
         return `
         <div class="card">
@@ -283,17 +431,88 @@
         </div>`;
       }).join('');
 
-      const permissions = report.permissions || [];
-      permissionTable.innerHTML = `
-        <tr><th>Agent / Skill</th><th>工具权限</th><th>高危</th><th>备注</th></tr>
-        ${permissions.map(p => `
-          <tr>
-            <td>${escapeHtml((p && p.name) || '-')}</td>
-            <td>${escapeHtml((((p && p.tools) || []).join(', ')) || '-')}</td>
-            <td><span class="badge">${escapeHtml((((p && p.highRiskTools) || []).join(', ')) || '-')}</span></td>
-            <td>${escapeHtml((((p && p.notes) || []).join('；')) || '-')}</td>
-          </tr>`).join('')}
-      `;
+      if (report.externalOnly && externalEntries.length) {
+        const firstExternal = externalEntries[0];
+        const extScores = firstExternal.externalScores || {};
+        const externalSummary = [
+          { key: 'privacy', label: '隐私泄露', desc: '未安装 skill 体检视图' },
+          { key: 'privilege', label: '越权风险', desc: '未安装 skill 体检视图' },
+          { key: 'memory', label: '记忆膨胀', desc: '未安装 skill 体检视图' },
+          { key: 'token', label: 'Token 成本', desc: '未安装 skill 体检视图' },
+          { key: 'failure', label: '失败率', desc: '未安装 skill 体检视图' }
+        ];
+
+        summaryHtml = externalSummary.map(({ key, label, desc }) => {
+          const value = typeof extScores[key] === 'number' ? extScores[key] : '-';
+          const numeric = Number(value) || 0;
+          const meta = riskLevelInfo(numeric);
+          return `
+          <div class="card">
+            <h2>${escapeHtml(label)}</h2>
+            <div class="risk-value" style="color:${riskColors(numeric)};">${value}</div>
+            <div class="risk-desc">${escapeHtml(desc)}</div>
+            <div class="risk-meta" style="color:${meta.color};">${meta.label} · ${meta.range}</div>
+          </div>`;
+        }).join('');
+      }
+
+      riskSummaryEl.innerHTML = summaryHtml;
+      if (externalEntries.length && !report.externalOnly) {
+        externalSummaryEl.innerHTML = externalEntries.map(entry => {
+          const scores = entry.externalScores || {};
+          const metrics = [
+            { key: 'privacy', label: '隐私泄露' },
+            { key: 'privilege', label: '越权风险' },
+            { key: 'memory', label: '记忆膨胀' },
+            { key: 'token', label: 'Token 成本' },
+            { key: 'failure', label: '失败率' },
+          ];
+          return `
+          <div class="card external-skill-block">
+            <h3>${escapeHtml(entry.name)}</h3>
+            <div class="external-grid">
+              ${metrics.map(metric => {
+                const value = typeof scores[metric.key] === 'number' ? scores[metric.key] : '-';
+                return `
+                <div class="external-metric">
+                  <div class="label">${metric.label}</div>
+                  <div class="value" style="color:${riskColors(Number(value) || 0)};">${value}</div>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>`;
+        }).join('');
+        externalSummaryEl.style.display = 'block';
+      } else {
+        externalSummaryEl.innerHTML = '';
+        externalSummaryEl.style.display = 'none';
+      }
+
+
+      const tableEntries = report.externalOnly ? permissions.filter(p => p.externalScores) : permissions;
+      if (!tableEntries.length) {
+        permissionTable.innerHTML = '<div class="empty-row">暂无数据</div>';
+      } else {
+        permissionTable.innerHTML = tableEntries.map(entry => {
+          const tools = escapeHtml(((entry?.tools || []).join(', ')) || '－');
+          const highRisk = escapeHtml(((entry?.highRiskTools || []).join(', ')) || '－');
+          const notes = escapeHtml(formatNotes(entry?.notes || []));
+          const score = typeof entry?.riskScore === 'number' ? entry.riskScore : '-';
+          const riskColor = typeof entry?.riskScore === 'number' ? riskColors(entry.riskScore) : 'var(--muted)';
+          return `
+            <div class="perm-card">
+              <div class="perm-card-header">
+                <span class="perm-name">${escapeHtml(entry?.name || '-')}</span>
+                <span class="perm-risk" style="color:${riskColor};">${score}</span>
+              </div>
+              <div class="perm-meta">
+                <div><span class="label">工具：</span>${tools}</div>
+                <div><span class="label">高危：</span>${highRisk}</div>
+              </div>
+              <div class="perm-notes">${notes}</div>
+            </div>`;
+        }).join('');
+      }
 
       const memoryFiles = report.memory?.files || [];
       memoryTable.innerHTML = `
@@ -318,6 +537,8 @@
             <td>${row.usage}</td>
           </tr>`).join('') : '<tr><td colspan="2">没有捕获到 token 数据</td></tr>'}
       `;
+
+      tokenCard.style.display = report.externalOnly ? 'none' : '';
 
       const suggestions = report.suggestions?.length ? report.suggestions : ['暂无建议'];
       suggestionsEl.innerHTML = suggestions.map(text => `
