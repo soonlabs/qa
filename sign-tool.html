@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>ClawBounty 签名工具</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+            color: #fff;
+        }
+        .container {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+        h1 { margin: 0 0 20px 0; color: #6366f1; }
+        .wallet { 
+            background: rgba(99,102,241,0.1); 
+            padding: 12px; 
+            border-radius: 8px; 
+            font-family: monospace;
+            font-size: 14px;
+            margin-bottom: 20px;
+            word-break: break-all;
+        }
+        .message {
+            background: rgba(0,0,0,0.3);
+            padding: 16px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 13px;
+            color: #22d3ee;
+            margin-bottom: 20px;
+        }
+        button {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        button:hover { opacity: 0.9; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .result {
+            margin-top: 20px;
+            padding: 16px;
+            background: rgba(34,211,238,0.1);
+            border: 1px solid rgba(34,211,238,0.3);
+            border-radius: 8px;
+            display: none;
+        }
+        .result.show { display: block; }
+        .sig { 
+            font-family: monospace; 
+            font-size: 12px; 
+            word-break: break-all;
+            background: rgba(0,0,0,0.3);
+            padding: 12px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .copy-btn {
+            margin-top: 10px;
+            padding: 10px 20px;
+            background: #22d3ee;
+            color: #000;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .error {
+            margin-top: 20px;
+            padding: 16px;
+            background: rgba(239,68,68,0.1);
+            border: 1px solid rgba(239,68,68,0.3);
+            border-radius: 8px;
+            color: #fca5a5;
+            display: none;
+        }
+        .error.show { display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🦞 ClawBounty 签名工具</h1>
+        
+        <div class="wallet">
+            钱包: 0x4a93dcbbfa2dc4eb61d37d1415e4d9fb1d609e07
+        </div>
+        
+        <div class="message" id="msg">
+            clawbounty-auth:nonce_01KKWQ36V0FCKK79JCFA44KZ0Q
+        </div>
+        
+        <button id="btn" onclick="sign()">✍️ 点击签名</button>
+        
+        <div id="result" class="result">
+            <div>✅ 签名成功！复制下面的结果：</div>
+            <div class="sig" id="sig"></div>
+            <button class="copy-btn" onclick="copy()">📋 复制签名</button>
+        </div>
+        
+        <div id="error" class="error"></div>
+    </div>
+
+    <script>
+        async function sign() {
+            const btn = document.getElementById('btn');
+            const result = document.getElementById('result');
+            const error = document.getElementById('error');
+            const sigDiv = document.getElementById('sig');
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ 等待签名...';
+            result.classList.remove('show');
+            error.classList.remove('show');
+            
+            try {
+                if (!window.ethereum) {
+                    throw new Error('请安装 MetaMask 或 OKX Wallet');
+                }
+                
+                const message = document.getElementById('msg').textContent.trim();
+                const from = "0x4a93dcbbfa2dc4eb61d37d1415e4d9fb1d609e07";
+                
+                const signature = await window.ethereum.request({
+                    method: "personal_sign",
+                    params: [message, from]
+                });
+                
+                sigDiv.textContent = signature;
+                result.classList.add('show');
+                btn.textContent = '✅ 签名完成';
+                
+            } catch (err) {
+                error.textContent = '❌ ' + err.message;
+                error.classList.add('show');
+                btn.disabled = false;
+                btn.textContent = '✍️ 重新签名';
+            }
+        }
+        
+        function copy() {
+            const sig = document.getElementById('sig').textContent;
+            navigator.clipboard.writeText(sig);
+            alert('✅ 已复制！请粘贴发送给 lucykini');
+        }
+    </script>
+</body>
+</html>
