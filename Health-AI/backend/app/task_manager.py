@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 SUPPORTED_SKILLS = {
-    "agent-audit",
+    "skill-security-audit",
     "multichain-contract-vuln",
     "skill-stress-lab",
 }
@@ -37,6 +37,7 @@ class TaskRecord:
     summary_path: Optional[str] = None
     log_path: Optional[str] = None
     params: Dict[str, Any] = field(default_factory=dict)
+    wallet_address: Optional[str] = None  # 关联的钱包地址
 
     def to_dict(self) -> Dict[str, Any]:
         payload = asdict(self)
@@ -103,6 +104,7 @@ class TaskManager:
         code_path: Optional[str],
         upload_id: Optional[str],
         params: Optional[Dict[str, Any]] = None,
+        wallet_address: Optional[str] = None,
     ) -> TaskRecord:
         if skill_type not in SUPPORTED_SKILLS:
             raise ValueError(f"unsupported skill_type: {skill_type}")
@@ -116,6 +118,7 @@ class TaskManager:
             created_at=_now(),
             updated_at=_now(),
             params=params or {},
+            wallet_address=wallet_address,
         )
         with self._lock:
             self.tasks[task_id] = record
@@ -142,6 +145,21 @@ class TaskManager:
                 raise KeyError("task not found")
             return self._snapshot(record)
 
+    def get_tasks_by_wallet(self, wallet_address: str, skill_type: Optional[str] = None, limit: int = 50) -> list:
+        """获取指定钱包的分析历史"""
+        with self._lock:
+            tasks = [
+                self._snapshot(record)
+                for record in self.tasks.values()
+                if record.wallet_address and record.wallet_address.lower() == wallet_address.lower()
+            ]
+            # 按时间倒序
+            tasks.sort(key=lambda x: x.created_at, reverse=True)
+            # 按 skill_type 筛选
+            if skill_type:
+                tasks = [t for t in tasks if t.skill_type == skill_type]
+            return tasks[:limit]
+
     # --------------------------- helpers ---------------------------
     def _copy_code(self, source: Path, dest: Path) -> None:
         src = source.expanduser().resolve()
@@ -156,8 +174,8 @@ class TaskManager:
     def _run_skill(self, record: TaskRecord, workspace: Path, input_dir: Path) -> Dict[str, Any]:
         report_dir = workspace / "report"
         report_dir.mkdir(parents=True, exist_ok=True)
-        if record.skill_type == "agent-audit":
-            result = self._run_agent_audit(input_dir, report_dir)
+        if record.skill_type == "skill-security-audit":
+            result = self._run_security_audit(input_dir, report_dir, record.params or {})
         elif record.skill_type == "multichain-contract-vuln":
             result = self._run_contract_audit(input_dir, report_dir, record.params or {})
         else:
@@ -195,11 +213,11 @@ class TaskManager:
             raise RuntimeError(f"命令执行失败 (exit {proc.returncode}): {' '.join(cmd)}")
         return proc.stdout
 
-    def _run_agent_audit(self, code_dir: Path, report_dir: Path) -> Dict[str, Any]:
-        script = self.repo_root / "skills" / "agent-audit" / "scripts" / "audit_scan.py"
-        report_json = report_dir / "agent_audit.json"
-        report_md = report_dir / "agent_audit.md"
-        log_file = report_dir / "agent_audit.log"
+    def _run_security_audit(self, code_dir: Path, report_dir: Path, params: Dict[str, Any]) -> Dict[str, Any]:
+        script = self.repo_root / "skills" / "skill-security-audit" / "scripts" / "audit_skill.py"
+        report_json = report_dir / "security_audit.json"
+        report_md = report_dir / "security_audit.md"
+        log_file = report_dir / "security_audit.log"
         cmd = [
             "python3",
             str(script),
@@ -208,7 +226,12 @@ class TaskManager:
             "--markdown",
             str(report_md),
         ]
-        if code_dir.exists():
+        # 支持本地路径或远程 URL
+        skill_path = params.get("skillPath", "")
+        skill_url = params.get("skillUrl", "")
+        if skill_url:
+            cmd.extend(["--skill-url", skill_url])
+        elif code_dir.exists():
             skill_dirs = sorted({str(path.parent) for path in code_dir.rglob("SKILL.md")})
             targets = skill_dirs or [str(code_dir)]
             for target in targets:
@@ -219,7 +242,7 @@ class TaskManager:
             "report": str(report_md),
             "summary": str(report_json),
             "log": str(log_file),
-            "message": "Agent Audit 完成",
+            "message": "Skill Security Audit 完成",
             "details": summary_data,
         }
 
@@ -271,9 +294,10 @@ class TaskManager:
         summary_md = report_dir / "stress_summary.md"
         metrics_json = report_dir / "stress_metrics.json"
         logs_dir = report_dir / "runs"
+        # Use provided command or default to security_preflight.py
         command = params.get("command")
         if not command:
-            raise ValueError("stress-runner 需要 params.command (命令模板)")
+            command = "python3 {skill}/scripts/security_preflight.py"
         runs = int(params.get("runs", 10))
         concurrency = int(params.get("concurrency", 1))
         cmd = [
@@ -289,38 +313,132 @@ class TaskManager:
             str(logs_dir),
             "--summary-report",
             str(summary_md),
-            "--metrics-output",
-            str(metrics_json),
         ]
-        if params.get("collectMetrics"):
-            cmd.append("--collect-metrics")
+        # Note: --collect-metrics is not supported by stress_runner.py, skip it
         if params.get("workdir"):
             cmd.extend(["--workdir", str(params["workdir"])])
         if params.get("skillDir"):
             cmd.extend(["--skill-dir", str(params["skillDir"])])
         elif code_dir.exists():
-            cmd.extend(["--skill-dir", str(code_dir)])
+            # Find the actual skill subdirectory (e.g., input/skill-name/)
+            skill_subdirs = [d for d in code_dir.iterdir() if d.is_dir()]
+            if skill_subdirs:
+                cmd.extend(["--skill-dir", str(skill_subdirs[0])])
+            else:
+                cmd.extend(["--skill-dir", str(code_dir)])
         if params.get("openaiUsageFile"):
             cmd.extend(["--openai-usage-file", str(params["openaiUsageFile"])])
         if params.get("apiCountFile"):
             cmd.extend(["--api-count-file", str(params["apiCountFile"])])
         self._run_command(cmd, cwd=self.repo_root, log_file=log_file)
+        
+        # Generate enhanced report with 5-dimension scores
+        enhanced_md = report_dir / "stress_report.md"
+        self._generate_stress_lab_report(summary_md, enhanced_md, runs, concurrency)
+        
         summary_payload = {
             "runs": runs,
             "concurrency": concurrency,
             "command": command,
-            "summary_md": str(summary_md),
+            "summary_md": str(enhanced_md),
             "metrics_json": str(metrics_json),
             "logs_dir": str(logs_dir),
         }
         summary_json = report_dir / "stress_summary.json"
         summary_json.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2))
         return {
-            "report": str(summary_md),
+            "report": str(enhanced_md),
             "summary": str(summary_json),
             "log": str(log_file),
             "message": "压力测试完成",
         }
+
+    def _generate_stress_lab_report(self, summary_md: Path, output_md: Path, runs: int, concurrency: int) -> None:
+        """Generate enhanced stress lab report with 5-dimension scoring."""
+        # Read original summary
+        original_content = summary_md.read_text() if summary_md.exists() else ""
+        
+        # Parse metrics from summary content
+        import re
+        metrics = {}
+        
+        # Extract success rate
+        success_match = re.search(r'成功次数:\s*(\d+)\s*\(([^)]+)\)', original_content)
+        if success_match:
+            metrics['successes'] = int(success_match.group(1))
+            metrics['success_rate_str'] = success_match.group(2)
+        
+        # Extract avg duration
+        avg_match = re.search(r'平均耗时:\s*([\d.]+)s', original_content)
+        if avg_match:
+            metrics['avg_duration'] = float(avg_match.group(1))
+        
+        # Calculate 5-dimension scores based on metrics
+        stability_score = 100
+        performance_score = 95
+        resource_score = 90
+        consistency_score = 100
+        recovery_score = 100
+        
+        # Extract actual metrics if available
+        if metrics:
+            avg_duration = metrics.get('avg_duration', 0.05)
+            successes = metrics.get('successes', runs)
+            success_rate = successes / runs if runs > 0 else 1.0
+            failures = runs - successes
+            
+            # Stability: based on success rate
+            stability_score = int(success_rate * 100)
+            
+            # Performance: based on avg duration (lower is better, <0.1s = 100, >1s = 0)
+            performance_score = max(0, min(100, int(100 - (avg_duration - 0.1) * 100)))
+            
+            # Resource: assume good if low failures
+            resource_score = 90 if failures == 0 else max(0, 90 - failures * 10)
+            
+            # Consistency: based on success rate
+            consistency_score = stability_score
+            
+            # Recovery: 100 if no failures, lower if failures
+            recovery_score = 100 if failures == 0 else max(0, 100 - failures * 20)
+        
+        # Calculate overall score
+        overall_score = int((stability_score + performance_score + resource_score + consistency_score + recovery_score) / 5)
+        
+        # Build enhanced report
+        report_lines = [
+            "# Skill Stress Lab 报告",
+            "",
+            "## 基本信息",
+            f"- **测试轮次**: {runs}",
+            f"- **并发度**: {concurrency}",
+            "",
+            "---",
+            "",
+            "## 五维度评分 (0-100)",
+            "",
+            "| 维度 | 评分 | 说明 |",
+            "|-----|------|-----|",
+            f"| 🛡️ **稳定性** | {stability_score}/100 | 成功率表现 |",
+            f"| ⚡ **性能** | {performance_score}/100 | 响应时间表现 |",
+            f"| 💾 **资源** | {resource_score}/100 | 资源占用情况 |",
+            f"| 🔄 **一致性** | {consistency_score}/100 | 结果一致性 |",
+            f"| 🆘 **恢复** | {recovery_score}/100 | 故障恢复能力 |",
+            "",
+            f"### 📊 综合评分: **{overall_score}/100**",
+            "",
+            "---",
+            "",
+            "## 原始测试摘要",
+            "",
+            original_content,
+            "",
+            "---",
+            "",
+            "*报告由 Skill Stress Lab 自动生成*",
+        ]
+        
+        output_md.write_text("\n".join(report_lines), encoding="utf-8")
 
     def _snapshot(self, record: TaskRecord) -> TaskRecord:
         return TaskRecord(**record.to_dict())

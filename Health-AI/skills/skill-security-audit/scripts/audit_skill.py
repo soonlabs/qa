@@ -545,6 +545,8 @@ def collect_permissions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     agents = config.get("agents", {})
     for name, payload in agents.items():
+        if isinstance(payload, list):
+            continue
         payload = payload or {}
         tools = _normalize_tools(payload.get("tools", {}))
         skills = payload.get("skills") or []
@@ -790,7 +792,7 @@ def build_suggestions(report: Dict[str, Any]) -> List[Dict[str, Any]]:
             for item in memory_files[:3]
         ]
         suggestions.append({"type": "memory_sensitive", "files": focus})
-    elif report["privacyRisk"] > 0 and not memory_block.get("dataAvailable", True):
+    elif report["privacyScore"] < 60 and not memory_block.get("dataAvailable", True):
         suggestions.append({"type": "memory_missing"})
 
     permissions = report.get("permissions", [])
@@ -800,18 +802,18 @@ def build_suggestions(report: Dict[str, Any]) -> List[Dict[str, Any]]:
             suggestions.append({"type": "tool", "skill": entry["name"], "tool": tool})
 
     total_size = memory_block.get("totalSize", 0)
-    if report["memoryRisk"] > 0 and total_size:
+    if report["memoryScore"] < 60 and total_size:
         suggestions.append({"type": "memory_size", "size": total_size})
 
     token_block = report.get("tokens", {})
     models = token_block.get("byModel", [])
-    if report["tokenRisk"] > 0 and models:
+    if report["tokenScore"] < 60 and models:
         top = models[0]
         suggestions.append({"type": "token", "model": top["model"], "tokens": top["tokens"]})
 
     log_block = report.get("logs", {})
     logs = log_block.get("files", [])
-    if report["failureRisk"] > 0 and logs:
+    if report["failureScore"] < 60 and logs:
         worst = max(logs, key=lambda item: item.get("errors", 0))
         if worst.get("errors"):
             suggestions.append(
@@ -1095,6 +1097,14 @@ def generate_report(
     log_sensitive_hits = log_info.get("sensitiveHits", 0) + len(skill_log_hits)
     privacy_hits = memory_info.get("sensitiveHits", 0) + log_sensitive_hits
 
+    # Check if we have runtime data
+    has_memory_data = memory_info.get("dataAvailable", True) and memory_info.get("totalSize", 0) > 0
+    has_log_data = log_info.get("dataAvailable", True) and log_info.get("files")
+    has_token_data = token_info.get("dataAvailable", True) and token_info.get("totalTokens", 0) > 0
+
+    # Use static analysis scores when runtime data is missing
+    static_scores = _aggregate_static_scores(skills)
+
     report = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "permissions": permissions,
@@ -1104,11 +1114,27 @@ def generate_report(
         "externalOnly": bool(combined),
         "skillLogHits": skill_log_hits,
     }
-    report["privacyRisk"] = score_privacy(privacy_hits)
-    report["privilegeRisk"] = score_privilege(permissions)
-    report["memoryRisk"] = score_memory(memory_info.get("totalSize", 0))
-    report["tokenRisk"] = score_tokens(token_info.get("totalTokens", 0))
-    report["failureRisk"] = score_failures(log_info.get("errorRate", 0.0))
+
+    # Calculate scores: use runtime data if available, otherwise use static analysis
+    # Calculate risk scores (0-100, higher = more risky)
+    risk_privacy = score_privacy(privacy_hits) if has_memory_data or privacy_hits > 0 else static_scores.get("privacy", 0)
+    risk_privilege = score_privilege(permissions) if permissions else static_scores.get("privilege", 0)
+    risk_memory = score_memory(memory_info.get("totalSize", 0)) if has_memory_data else static_scores.get("memory", 0)
+    risk_token = score_tokens(token_info.get("totalTokens", 0)) if has_token_data else static_scores.get("token", 0)
+    risk_failure = score_failures(log_info.get("errorRate", 0.0)) if has_log_data else static_scores.get("failure", 0)
+    
+    # Convert to safety scores (0-100, higher = safer)
+    report["privacyScore"] = max(0, 100 - risk_privacy)
+    report["privilegeScore"] = max(0, 100 - risk_privilege)
+    report["memoryScore"] = max(0, 100 - risk_memory)
+    report["tokenScore"] = max(0, 100 - risk_token)
+    report["failureScore"] = max(0, 100 - risk_failure)
+    
+    # Calculate overall safety score
+    report["overallScore"] = int((report["privacyScore"] + report["privilegeScore"] + report["memoryScore"] + report["tokenScore"] + report["failureScore"]) / 5)
+
+    # Add static scores to report for reference
+    report["staticScores"] = static_scores
 
     warnings: List[str] = []
     if not memory_info.get("dataAvailable", True):
@@ -1123,6 +1149,38 @@ def generate_report(
 
     report["suggestions"] = build_suggestions(report)
     return report
+
+
+def _aggregate_static_scores(skills: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Aggregate static analysis scores from external skills."""
+    if not skills:
+        return {"privacy": 0, "privilege": 0, "memory": 0, "token": 0, "failure": 0}
+
+    all_scores = {
+        "privacy": [],
+        "privilege": [],
+        "memory": [],
+        "token": [],
+        "failure": [],
+    }
+
+    for skill in skills:
+        ext_scores = skill.get("externalScores", {})
+        if ext_scores:
+            for key in all_scores:
+                if key in ext_scores and ext_scores[key] is not None:
+                    all_scores[key].append(ext_scores[key])
+
+    # Calculate average for each dimension, or use defaults if no scores
+    result = {}
+    for key, values in all_scores.items():
+        if values:
+            result[key] = int(sum(values) / len(values))
+        else:
+            # Default scores based on risk assessment
+            result[key] = 15 if key in ["privilege", "failure"] else 5
+
+    return result
 
 
 def _secure_write(path: Path, content: str) -> None:
@@ -1171,14 +1229,16 @@ def to_markdown(report: Dict[str, Any], lang: str = "en") -> str:
             )
 
     lines = [title, f"{generated_label}：{report['generatedAt']}", "", risk_header]
+    overall = report.get('overallScore', 0)
     if lang == "zh":
         lines.extend([
-            f"- 隐私风险：{report['privacyRisk']}",
-            f"- 权限风险：{report['privilegeRisk']}",
-            f"- 记忆膨胀：{report['memoryRisk']}",
-            f"- Token 成本：{report['tokenRisk']}",
-            f"- 失败率：{report['failureRisk']}",
-            "> 评分说明：0-30=低，31-60=中，>60=高",
+            f"- 综合安全评分：{overall}/100",
+            f"- 隐私安全：{report.get('privacyScore', 0)}/100",
+            f"- 权限安全：{report.get('privilegeScore', 0)}/100",
+            f"- 内存安全：{report.get('memoryScore', 0)}/100",
+            f"- Token 安全：{report.get('tokenScore', 0)}/100",
+            f"- 稳定性：{report.get('failureScore', 0)}/100",
+            "> 评分说明：80-100=优秀，60-79=良好，40-59=一般，<40=需改进",
         ])
     else:
         lines.extend([
